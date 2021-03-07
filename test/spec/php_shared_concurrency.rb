@@ -1,7 +1,6 @@
 require_relative "spec_helper"
 
 shared_examples "A PHP application for testing WEB_CONCURRENCY behavior" do |series, server|
-
 	context "running PHP #{series} and the #{server} web server" do
 		before(:all) do
 			@app = new_app_with_stack_and_platrepo('test/fixtures/bootopts',
@@ -81,6 +80,38 @@ shared_examples "A PHP application for testing WEB_CONCURRENCY behavior" do |ser
 				expect(expect_exit(code: 0) { @app.run("./waitforit.sh 15 'ready for connections' heroku-php-#{server} --verbose", :return_obj => true, :heroku => {:size => "Performance-L"}) }.output)
 					 .to match("Detected 15032385536 Bytes of RAM")
 					.and match("Starting php-fpm with 112 workers...")
+			end
+		end
+	end
+	
+	context "running PHP #{series} and the #{server} web server with heroku/nodejs as the second buildpack" do
+		before(:all) do
+			@app = new_app_with_stack_and_platrepo('test/fixtures/bootopts',
+				before_deploy: -> { system("echo '{}' > package.json; composer require --quiet --ignore-platform-reqs php '#{series}.*'") or raise "Failed to require PHP version" },
+				run_multi: true,
+				buildpacks: [
+					:default,
+					"https://github.com/heroku/heroku-buildpack-nodejs.git#web-concurrency-set-by"
+				]
+			)
+			@app.deploy
+		end
+		
+		after(:all) do
+			@app.teardown!
+		end
+		
+		context "with heroku/nodejs having set WEB_CONCURRENCY" do
+			it "re-sets WEB_CONCURRENCY and warns" do
+				expect(expect_exit(code: 0) { @app.run("./waitforit.sh 15 'ready for connections' heroku-php-#{server} --verbose", :return_obj => true) }.output)
+					 .to match("WARNING: \\$WEB_CONCURRENCY was set by 'heroku/nodejs'")
+					.and match("PHP memory_limit is 128M Bytes")
+					.and match("Starting php-fpm with 4 workers...")
+			end
+			
+			it "sets WEB_CONCURRENCY_SET_BY='heroku/php' as an env var" do
+				expect(successful_body(@app))
+					.to match(/<td class="e">\$?_ENV\[['"]WEB_CONCURRENCY_SET_BY['"]\]<\/td>\s*<td class="v">heroku\/php<\/td>/m)
 			end
 		end
 	end
