@@ -101,7 +101,7 @@ shared_examples "A PHP application for testing WEB_CONCURRENCY behavior" do |ser
 			@app.teardown!
 		end
 		
-		context "with heroku/nodejs having set WEB_CONCURRENCY" do
+		context "with heroku/nodejs having set WEB_CONCURRENCY", :focused => true do
 			it "re-sets WEB_CONCURRENCY and warns" do
 				expect(expect_exit(code: 0) { @app.run("./waitforit.sh 15 'ready for connections' heroku-php-#{server} --verbose", :return_obj => true) }.output)
 					 .to match("WARNING: \\$WEB_CONCURRENCY was set by 'heroku/nodejs'")
