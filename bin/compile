@@ -257,6 +257,9 @@ composer_vendordir=$(composer config --no-plugins vendor-dir)
 composer_bindir=$(composer config --no-plugins bin-dir)
 
 mkdir -p $build_dir/.profile.d
+echo 'set -x' >> $build_dir/.profile.d/000-debug.sh
+echo 'pwd' >> $build_dir/.profile.d/000-debug.sh
+echo 'echo "$@"' >> $build_dir/.profile.d/000-debug.sh
 
 # we perform this check early so people with stale lock files are reminded why if their lock file errors in the next step
 composer_lock_outdated=false
