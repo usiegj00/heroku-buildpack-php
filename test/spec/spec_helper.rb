@@ -111,3 +111,20 @@ def retry_until(options = {})
 		retry
 	end
 end
+
+module Hatchet
+	class App
+		def teardown!
+			return false unless @app_is_setup
+
+			if @run_multi_is_setup
+				@run_multi_array.map(&:join)
+				platform_api.formation.update(name, "web", {"size" => "basic"})
+			end
+
+		ensure
+			@app_update_info = platform_api.app.update(name, { maintenance: true }) if @app_is_setup
+			@reaper.cycle if @app_is_setup
+		end
+	end
+end
