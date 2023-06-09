@@ -20,8 +20,9 @@ fi
 
 # we very likely got called via a symlink, so we have to realpath $0 first to find the base buildpack directory
 bp_dir=$(cd $(dirname $(realpath $0)); cd ..; pwd)
-# we also need the "server root" for later
-server_root=$(cd $(dirname $(which httpd)); cd ..; pwd)
+# we need the "server root" for later invocation of both
+php_server_root=$(cd $(dirname $(which php-fpm)); cd ..; pwd)
+web_server_root=$(cd $(dirname $(which httpd)); cd ..; pwd)
 
 verbose=
 
@@ -290,9 +291,7 @@ logs+=( "/tmp/heroku.php-fpm.$PORT.log" "/tmp/heroku.php-fpm.www.$PORT.log" "/tm
 # a bunch of checks; don't load any INIs to prevent newrelic etc from loading, we don't need all that stuff
 php -r 'exit((int)version_compare(PHP_VERSION, "5.5.11", "<"));' || { echo "This program requires PHP 5.5.11 or newer; check your 'php' command." >&2; exit 1; }
 { php-fpm -n -v | php -r 'exit((int)version_compare(preg_replace("#PHP (\S+) \(fpm-fcgi\).+$#sm", "\\1", file_get_contents("php://stdin")), "5.5.11", "<"));'; } || { echo "This program requires PHP 5.5.11 or newer; check your 'php-fpm' command." >&2; exit 1; }
-# we need the "server root" for invocation
-server_root=$(cd $(dirname $(which php)); cd ..; pwd)
-{ { httpd -v | php -r 'exit((int)version_compare(preg_replace("#^Server version: Apache/(\S+).+$#sm", "\\1", file_get_contents("php://stdin")), "2.4.10", "<"));'; } && { httpd -d "$server_root" -t -D DUMP_MODULES | grep 'proxy_fcgi_module' > /dev/null; }; } || { echo "This program requires Apache 2.4.10 or newer with mod_proxy and mod_proxy_fcgi enabled; check your 'httpd' command." >&2; exit 1; }
+{ { httpd -v | php -r 'exit((int)version_compare(preg_replace("#^Server version: Apache/(\S+).+$#sm", "\\1", file_get_contents("php://stdin")), "2.4.10", "<"));'; } && { httpd -d "$web_server_root" -t -D DUMP_MODULES | grep 'proxy_fcgi_module' > /dev/null; }; } || { echo "This program requires Apache 2.4.10 or newer with mod_proxy and mod_proxy_fcgi enabled; check your 'httpd' command." >&2; exit 1; }
 
 php_version="$(php-fpm -n -v | php -r 'echo preg_replace("#PHP (\S+) \(fpm-fcgi\).+$#sm", "\\1", file_get_contents("php://stdin"));')"
 httpd_version="$(httpd -v | php -r 'echo preg_replace("#^Server version: Apache/(\S+).+$#sm", "\\1", file_get_contents("php://stdin"));')"
@@ -343,7 +342,7 @@ fpm_config=$(php_passthrough "$fpm_config")
 
 # we explicitly use the INI file php-fpm would load if no INI is given
 # this is to ensure that e.g. our WEB_CONCURRENCY calculation doesn't pick up a php-cli.ini
-fpm_ini=$(php-fpm --prefix "$server_root" -i | awk -F' => ' '/^Loaded Configuration File/{print $2}')
+fpm_ini=$(php-fpm --prefix "$php_server_root" -i | awk -F' => ' '/^Loaded Configuration File/{print $2}')
 if [[ -n ${php_config:-} || ( "$fpm_ini" != "(none)" && ${php_config:=$fpm_ini} && $verbose ) ]]; then
 	echo "Using PHP configuration (php.ini) file '${php_config#$HEROKU_APP_DIR/}'" >&2
 fi
@@ -523,7 +522,7 @@ fpm_pidfile=$(mktemp -t "heroku.php-fpm.pid-$PORT.XXXXXX" -u)
 		export PHP_INI_SCAN_DIR=$_PHP_INI_SCAN_DIR
 	fi
 
-	php-fpm --prefix "$server_root" --pid "$fpm_pidfile" --nodaemonize -y "$fpm_config" ${php_config:+-c "$php_config"} & pid=$!
+	php-fpm --prefix "$php_server_root" --pid "$fpm_pidfile" --nodaemonize -y "$fpm_config" ${php_config:+-c "$php_config"} & pid=$!
 	# wait for the pidfile in the trap; otherwise, a previous subshell failing may result in us getting a SIGTERM and forwarding it to the child process before that child process is ready to process signals
 	trap 'echo "Stopping php-fpm gracefully..." >&2; wait_pid_and_pidfile $pid "$fpm_pidfile"; kill -QUIT $pid 2> /dev/null || true' USR1
 	# we always want to try and stop gracefully, especially since on Heroku we might be getting a process group wide SIGTERM but running a patched PHP-FPM that ignores SIGTERM; so if that env var is set, we ignore SIGTERM in this subshell as well
@@ -539,7 +538,7 @@ fpm_pidfile=$(mktemp -t "heroku.php-fpm.pid-$PORT.XXXXXX" -u)
 	wait $pid 2> /dev/null || true # redirect stderr to prevent possible trap race condition warnings
 ) & pids+=($!)
 
-httpd_pidfile=$(httpd -d "$server_root" -t -D DUMP_RUN_CFG 2> /dev/null | sed -n -E 's/PidFile: "(.+)"/\1/p') # get PidFile location
+httpd_pidfile=$(httpd -d "$web_server_root" -t -D DUMP_RUN_CFG 2> /dev/null | sed -n -E 's/PidFile: "(.+)"/\1/p') # get PidFile location
 (
 	trap 'echo "httpd" >&3;' EXIT
 	trap '' INT;
@@ -552,7 +551,7 @@ httpd_pidfile=$(httpd -d "$server_root" -t -D DUMP_RUN_CFG 2> /dev/null | sed -n
 
 	echo "Starting httpd..." >&2
 
-	httpd -d "$server_root" -D NO_DETACH -c "Include $httpd_config" & pid=$!
+	httpd -d "$web_server_root" -D NO_DETACH -c "Include $httpd_config" & pid=$!
 	# wait for the pidfile in the trap; otherwise, a previous subshell failing may result in us getting a SIGTERM and forwarding it to the child process before that child process is ready to process signals
 	trap 'echo "Stopping httpd gracefully..." >&2; wait_pid_and_pidfile $pid "$httpd_pidfile"; kill -WINCH $pid 2> /dev/null || true' USR1
 	# we always want to try and stop gracefully, especially since on Heroku we might be getting a process group wide SIGTERM but running a patched HTTPD that ignores SIGTERM; so if that env var is set, we ignore SIGTERM in this subshell as well
